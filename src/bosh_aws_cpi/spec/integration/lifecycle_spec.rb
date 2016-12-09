@@ -48,7 +48,8 @@ describe Bosh::AwsCloud::Cloud do
         'fast_path_delete' => 'yes',
         'access_key_id' => @access_key_id,
         'secret_access_key' => @secret_access_key,
-        'max_retries' => 8
+        'max_retries' => 8,
+        'request_id' => '419877'
       },
       'registry' => {
         'endpoint' => 'fake',
@@ -70,7 +71,8 @@ describe Bosh::AwsCloud::Cloud do
   end
 
   before { allow(Bosh::Clouds::Config).to receive_messages(logger: logger) }
-  let(:logger) { Logger.new(STDERR) }
+  let(:logs) { STDOUT }
+  let(:logger) { Logger.new(logs) }
 
   extend Bosh::Cpi::CompatibilityHelpers
 
@@ -119,6 +121,74 @@ describe Bosh::AwsCloud::Cloud do
         }
 
       }
+    end
+
+    describe 'logging request_id' do
+      let(:logs) { StringIO.new('') }
+      let(:logger) { Logger.new(logs) }
+
+      context 'when request_id is present in the context' do
+        let(:endpoint_configured_cpi) do
+          Bosh::AwsCloud::Cloud.new(
+              'aws' => {
+                  'ec2_endpoint' => 'https://ec2.us-east-1.amazonaws.com',
+                  'elb_endpoint' => 'https://elasticloadbalancing.us-east-1.amazonaws.com',
+                  'default_key_name' => default_key_name,
+                  'default_security_groups' => security_groups,
+                  'fast_path_delete' => 'yes',
+                  'access_key_id' => @access_key_id,
+                  'secret_access_key' => @secret_access_key,
+                  'max_retries' => 8,
+                  'request_id' => '419877'
+              },
+              'registry' => {
+                  'endpoint' => 'fake',
+                  'user' => 'fake',
+                  'password' => 'fake'
+              }
+          )
+        end
+
+        it 'logs request_id' do
+          begin
+            stemcell_id = endpoint_configured_cpi.create_stemcell('/not/a/real/path', {'ami' => {'us-east-1' => ami}})
+            expect(logs.string).to include('req_id 419877')
+          ensure
+            endpoint_configured_cpi.delete_stemcell(stemcell_id) if stemcell_id
+          end
+        end
+      end
+
+      context 'when request_id is NOT present in the context' do
+        let(:endpoint_configured_cpi) do
+          Bosh::AwsCloud::Cloud.new(
+              'aws' => {
+                  'ec2_endpoint' => 'https://ec2.us-east-1.amazonaws.com',
+                  'elb_endpoint' => 'https://elasticloadbalancing.us-east-1.amazonaws.com',
+                  'default_key_name' => default_key_name,
+                  'default_security_groups' => security_groups,
+                  'fast_path_delete' => 'yes',
+                  'access_key_id' => @access_key_id,
+                  'secret_access_key' => @secret_access_key,
+                  'max_retries' => 8
+              },
+              'registry' => {
+                  'endpoint' => 'fake',
+                  'user' => 'fake',
+                  'password' => 'fake'
+              }
+          )
+        end
+
+        it 'logs request_id' do
+          begin
+            stemcell_id = endpoint_configured_cpi.create_stemcell('/not/a/real/path', {'ami' => {'us-east-1' => ami}})
+            expect(logs.string).to_not include('req_id: 419877')
+          ensure
+            endpoint_configured_cpi.delete_stemcell(stemcell_id) if stemcell_id
+          end
+        end
+      end
     end
 
     context 'vm_type specifies elb for instance' do
