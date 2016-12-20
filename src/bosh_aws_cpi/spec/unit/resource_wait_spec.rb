@@ -20,7 +20,7 @@ module Bosh::AwsCloud
       context 'creation' do
         context 'when EC2 fails to find an instance' do
           it 'should wait until the state is running' do
-            expect(instance).to receive(:status).and_raise(Aws::EC2::Errors::InvalidInstanceID::NotFound)
+            expect(instance).to receive(:status).and_raise(Aws::EC2::Errors::InvalidInstanceIDNotFound)
             expect(instance).to receive(:status).and_return(:pending)
             expect(instance).to receive(:status).and_return(:running)
 
@@ -41,7 +41,7 @@ module Bosh::AwsCloud
         context 'when resource status service is not available' do
           it 'should wait until the service is available and the state is running' do
             expect(instance).to receive(:status).and_raise(
-              Aws::Errors::ServerError.new('The service is unavailable. Please try again shortly.'))
+              Aws::Errors::ServiceError.new('The service is unavailable. Please try again shortly.'))
             expect(instance).to receive(:status).and_return(:pending)
             expect(instance).to receive(:status).and_return(:running)
 

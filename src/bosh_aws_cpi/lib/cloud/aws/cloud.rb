@@ -74,7 +74,7 @@ module Bosh::AwsCloud
 
       initialize_registry
 
-      elb = Aws::ElasticLoadBalancingV2::Client.new(
+      elb = Aws::ElasticLoadBalancing::Client.new(
         {
           region: @aws_params[:region],
           credentials: @aws_params[:credentials]
@@ -220,8 +220,8 @@ module Bosh::AwsCloud
           kms_key_arn: cloud_properties['kms_key_arn']
         )
 
-        resp = @ec2_client.client.create_volume(volume_properties.persistent_disk_config)
-        volume = Aws::EC2::Volume.new_from(:create_volume, resp, resp.volume_id, config: @ec2_client.config)
+        volume_type = @ec2_client.create_volume(volume_properties.persistent_disk_config)
+        volume = Aws::EC2::Volume.new(volume_type.volume_id, @ec2_client)
 
         logger.info("Creating volume '#{volume.id}'")
         ResourceWait.for_volume(volume: volume, state: :available)
@@ -238,7 +238,13 @@ module Bosh::AwsCloud
     def has_disk?(disk_id)
       with_thread_name("has_disk?(#{disk_id})") do
         @logger.info("Check the presence of disk with id `#{disk_id}'...")
-        @ec2_resource.volumes[disk_id].exists?
+        volume = @ec2_resource.volume(disk_id)
+        begin
+          volume.state
+        rescue Aws::EC2::Errors::InvalidVolumeNotFound
+          return false
+        end
+        true
       end
     end
 
@@ -248,7 +254,7 @@ module Bosh::AwsCloud
     # @raise [Bosh::Clouds::CloudError] if disk is not in available state
     def delete_disk(disk_id)
       with_thread_name("delete_disk(#{disk_id})") do
-        volume = @ec2_resource.volumes[disk_id]
+        volume = @ec2_resource.volume(disk_id)
 
         logger.info("Deleting volume `#{volume.id}'")
 
@@ -297,8 +303,8 @@ module Bosh::AwsCloud
     # @param [String] disk_id EBS volume id of the disk to attach
     def attach_disk(instance_id, disk_id)
       with_thread_name("attach_disk(#{instance_id}, #{disk_id})") do
-        instance = @ec2_resource.instances[instance_id]
-        volume = @ec2_resource.volumes[disk_id]
+        instance = @ec2_resource.instance(instance_id)
+        volume = @ec2_resource.volume(disk_id)
 
         device_name = attach_ebs_volume(instance, volume)
 
@@ -319,10 +325,10 @@ module Bosh::AwsCloud
     # @param [String] disk_id EBS volume id of the disk to detach
     def detach_disk(instance_id, disk_id)
       with_thread_name("detach_disk(#{instance_id}, #{disk_id})") do
-        instance = @ec2_resource.instances[instance_id]
-        volume = @ec2_resource.volumes[disk_id]
+        instance = @ec2_resource.instance(instance_id)
+        volume = @ec2_resource.volume(disk_id)
 
-        if volume.exists?
+        if has_disk?(disk_id)
           detach_ebs_volume(instance, volume)
         else
           @logger.info("Disk `#{disk_id}' not found while trying to detach it from vm `#{instance_id}'...")
@@ -340,7 +346,7 @@ module Bosh::AwsCloud
 
     def get_disks(vm_id)
       disks = []
-      @ec2_resource.instances[vm_id].block_devices.each do |block_device|
+      @ec2_resource.instance(vm_id).block_devices.each do |block_device|
         if block_device[:ebs]
           disks << block_device[:ebs][:volume_id]
         end
@@ -355,7 +361,7 @@ module Bosh::AwsCloud
       metadata = Hash[metadata.map { |key, value| [key.to_s, value] }]
 
       with_thread_name("snapshot_disk(#{disk_id})") do
-        volume = @ec2_resource.volumes[disk_id]
+        volume = @ec2_resource.volume(disk_id)
         devices = []
         volume.attachments.each { |attachment| devices << attachment.device }
 
@@ -380,12 +386,7 @@ module Bosh::AwsCloud
     # @param [String] snapshot_id snapshot id to delete
     def delete_snapshot(snapshot_id)
       with_thread_name("delete_snapshot(#{snapshot_id})") do
-        snapshot = @ec2_resource.snapshots[snapshot_id]
-
-        if snapshot.status == :in_use
-          raise Bosh::Clouds::CloudError, "snapshot '#{snapshot.id}' can not be deleted as it is in use"
-        end
-
+        snapshot = @ec2_resource.snapshot(snapshot_id)
         snapshot.delete
         logger.info("snapshot '#{snapshot_id}' deleted")
       end
@@ -457,7 +458,7 @@ module Bosh::AwsCloud
     def set_vm_metadata(vm, metadata)
       metadata = Hash[metadata.map { |key, value| [key.to_s, value] }]
 
-      instance = @ec2_resource.instances[vm]
+      instance = @ec2_resource.instance(vm)
 
       metadata.each_pair do |key, value|
         TagManager.tag(instance, key, value) unless key == 'name'
@@ -569,7 +570,7 @@ module Bosh::AwsCloud
         instance = nil
         volume = nil
 
-        instance = @ec2_resource.instances[current_vm_id]
+        instance = @ec2_resource.instance(current_vm_id)
         unless instance.exists?
           cloud_error(
             "Could not locate the current VM with id '#{current_vm_id}'." +
@@ -579,7 +580,7 @@ module Bosh::AwsCloud
 
         disk_size = stemcell_properties["disk"] || 2048
         volume_id = create_disk(disk_size, {}, current_vm_id)
-        volume = @ec2_resource.volumes[volume_id]
+        volume = @ec2_resource.volume(volume_id)
 
         sd_name = attach_ebs_volume(instance, volume)
         device_path = find_device_path_by_name(sd_name)
@@ -628,10 +629,13 @@ module Bosh::AwsCloud
           cloud_error("Failed to attach disk: #{error.message}")
         end
 
-        attachment = volume.attach_to(instance, device_name)
+        attachment = volume.attach_to_instance({
+          instance_id: instance.id,
+          device: device_name,
+        })
       end
 
-      ResourceWait.for_attachment(attachment: attachment, state: :attached)
+      ResourceWait.for_attachment(volume: volume, device: attachment.device, state: :attached, instance_id: attachment.instance_id)
 
       device_name = attachment.device
       logger.info("Attached '#{volume.id}' to '#{instance.id}' as '#{device_name}'")
@@ -640,11 +644,9 @@ module Bosh::AwsCloud
     end
 
     def select_device_name(instance)
-      device_names = Set.new(instance.block_device_mappings.to_hash.keys)
+      device_names = instance.block_device_mappings.map { |dm| dm.device_name }
 
       ('f'..'p').each do |char| # f..p is what console suggests
-        # Some kernels will remap sdX to xvdX, so agent needs
-        # to lookup both (sd, then xvd)
         device_name = "/dev/sd#{char}"
         return device_name unless device_names.include?(device_name)
         logger.warn("'#{device_name}' on '#{instance.id}' is taken")

@@ -3,6 +3,7 @@ require 'bosh/cpi/compatibility_helpers/delete_vm'
 require 'tempfile'
 require 'logger'
 require 'cloud'
+require 'pry-byebug'
 
 describe Bosh::AwsCloud::Cloud do
   before(:all) do
@@ -64,9 +65,8 @@ describe Bosh::AwsCloud::Cloud do
         access_key_id:     @access_key_id,
         secret_access_key: @secret_access_key,
       )
-      # TODO: make sure we're using filters properly
       instances = Aws::EC2::Resource.new(client: ec2_client).instances({
-        filters: [{ name: 'tag:delete-me', }],
+        filters: [ { name: 'tag-key', values: ['delete-me'] } ],
       }).each(&:terminate)
     rescue Aws::EC2::Errors::InvalidInstanceIdNotFound
       # don't blow up tests if instance that we're trying to delete was not found
@@ -170,7 +170,7 @@ describe Bosh::AwsCloud::Cloud do
             'secret_access_key' => @secret_access_key
           }
 
-          elb_client = Aws::ELB::Client.new(aws_params)
+          elb_client = Aws::ElasticLoadBalancing::Client.new(aws_params)
           instances = elb_client.describe_load_balancers({:load_balancer_names => [@elb_id]})[:load_balancer_descriptions]
                         .first[:instances].first[:instance_id]
 
@@ -217,11 +217,10 @@ describe Bosh::AwsCloud::Cloud do
               director_name: 'Director',
               director_uuid: '6d06b0cc-2c08-43c5-95be-f1b2dd247e18',
             )
-
             snapshot_id = cpi.snapshot_disk(volume_id, snapshot_metadata)
             expect(snapshot_id).not_to be_nil
 
-            snapshot = cpi.ec2_client.snapshots[snapshot_id]
+            snapshot = cpi.ec2_client.snapshot(snapshot_id)
             expect(snapshot.tags.device).to eq '/dev/sdf'
             expect(snapshot.tags.agent_id).to eq 'agent'
             expect(snapshot.tags.instance_id).to eq 'instance'
@@ -434,7 +433,7 @@ describe Bosh::AwsCloud::Cloud do
 
         it 'should not contain a block_device_mapping for /dev/sdb' do
           vm_lifecycle do |instance_id|
-            block_device_mapping = cpi.ec2_client.instances[instance_id].block_devices
+            block_device_mapping = cpi.ec2_client.instance(instance_id).block_devices
             ebs_ephemeral = block_device_mapping.any? {|entry| entry[:device_name] == '/dev/sdb'}
 
             expect(ebs_ephemeral).to eq(false)
@@ -459,7 +458,7 @@ describe Bosh::AwsCloud::Cloud do
 
         it 'creates an encrypted ephemeral disk' do
           vm_lifecycle do |instance_id|
-            block_device_mapping = cpi.ec2_client.instances[instance_id].block_devices
+            block_device_mapping = cpi.ec2_client.instance(instance_id).block_devices
             ephemeral_block_device = block_device_mapping.detect {|entry| entry[:device_name] == '/dev/sdb'}
 
             ephemeral_disk = cpi.ec2_client.volumes[ephemeral_block_device[:ebs][:volume_id]]
@@ -636,7 +635,7 @@ describe Bosh::AwsCloud::Cloud do
           expect(ami_root_volume_size).to be > 0
 
           vm_lifecycle(root_disk_vm_props) do |instance_id|
-            instance = cpi.ec2_client.instances[instance_id]
+            instance = cpi.ec2_client.instance(instance_id)
             instance_root_device = get_root_block_device(instance.root_device_name, instance.block_devices)
 
             root_volume = cpi.ec2_client.volumes[instance_root_device[root_device_type][:volume_id]]
@@ -719,7 +718,7 @@ describe Bosh::AwsCloud::Cloud do
     context '#set_vm_metadata' do
       it 'correctly sets the tags set by #set_vm_metadata' do
         vm_lifecycle do |instance_id|
-          tags = cpi.ec2_client.instances[instance_id].tags
+          tags = cpi.ec2_client.instance(instance_id).tags
           expect(tags['deployment']).to eq('deployment')
           expect(tags['job']).to eq('cpi_spec')
           expect(tags['index']).to eq('0')
@@ -792,7 +791,7 @@ describe Bosh::AwsCloud::Cloud do
 
     it 'sets source_dest_check to true by default' do
       vm_lifecycle do |instance_id|
-        instance = cpi.ec2_client.instances[instance_id]
+        instance = cpi.ec2_client.instance(instance_id)
 
         expect(instance.source_dest_check).to be(true)
       end
@@ -809,7 +808,7 @@ describe Bosh::AwsCloud::Cloud do
 
       it 'modifies the instance to disable source_dest_check' do
         vm_lifecycle do |instance_id|
-          instance = cpi.ec2_client.instances[instance_id]
+          instance = cpi.ec2_client.instance(instance_id)
 
           expect(instance.source_dest_check).to be(false)
         end
@@ -845,7 +844,7 @@ describe Bosh::AwsCloud::Cloud do
       begin
         vm_lifecycle do |instance_id|
           begin
-            expect(cpi.ec2_client.instances[instance_id].ip_address).to_not be_nil
+            expect(cpi.ec2_client.instance(instance_id).ip_address).to_not be_nil
           end
         end
       end
@@ -902,11 +901,12 @@ describe Bosh::AwsCloud::Cloud do
   end
 
   def get_ami(ami_id)
-    ec2 = Aws::EC2::Client.new(
+    ec2_client = Aws::EC2::Client.new(
       access_key_id:     @access_key_id,
       secret_access_key: @secret_access_key,
       region:            @region,
     )
+    ec2 = Aws::EC2::Resource.new(ec2_client)
     ec2.image(ami_id)
   end
 end

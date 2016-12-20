@@ -55,7 +55,7 @@ module Bosh::AwsCloud
 
     # @param [String] instance_id EC2 instance id
     def find(instance_id)
-      Instance.new(@ec2.instances[instance_id], @registry, @elb, @logger)
+      Instance.new(@ec2.instance(instance_id), @registry, @elb, @logger)
     end
 
     private
@@ -113,7 +113,7 @@ module Bosh::AwsCloud
           @logger.warn("IP address was in use: #{error}")
         end
         resp = @ec2.client.run_instances(instance_params)
-        @ec2.instances[get_created_instance_id(resp)]
+        @ec2.instance(get_created_instance_id(resp))
       end
     end
 

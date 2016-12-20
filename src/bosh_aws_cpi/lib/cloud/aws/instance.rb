@@ -14,15 +14,19 @@ module Bosh::AwsCloud
     end
 
     def elastic_ip
-      @aws_instance.elastic_ip
+      @aws_instance.public_ip_address
     end
 
     def associate_elastic_ip(elastic_ip)
-      @aws_instance.associate_elastic_ip(elastic_ip)
+      # @aws_instance.associate_elastic_ip(elastic_ip)
+      classic_address = Aws::EC2::ClassicAddress.new(elastic_ip)
+      classic_address.associate({
+        instance_id: @aws_instance.id,
+      })
     end
 
     def disassociate_elastic_ip
-      @aws_instance.disassociate_elastic_ip
+      @aws_instance.classic_address.disassociate
     end
 
     def source_dest_check=(state)
@@ -84,7 +88,7 @@ module Bosh::AwsCloud
 
     # Determines if the instance exists.
     def exists?
-      @aws_instance.exists? && @aws_instance.status != :terminated
+      @aws_instance.exists? && @aws_instance.state.name != :terminated
     end
 
     def update_routing_tables(route_definitions)
@@ -107,8 +111,14 @@ module Bosh::AwsCloud
 
     def attach_to_load_balancers(load_balancer_ids)
       load_balancer_ids.each do |load_balancer_id|
-        lb = @elb.load_balancers[load_balancer_id]
-        lb.instances.register(@aws_instance)
+        lb = @elb.register_instances_with_load_balancer({
+          instances: [
+            {
+              instance_id: @aws_instance.id
+            }
+          ],
+          load_balancer_name: load_balancer_id,
+        })
       end
     end
   end
