@@ -131,7 +131,7 @@ module Bosh::AwsCloud
 
         it 'should consider InvalidVolume error to mean deleted' do
           expect(volume).to receive(:status).and_return(:deleting)
-          expect(volume).to receive(:status).and_raise(Aws::EC2::Errors::InvalidVolume::NotFound)
+          expect(volume).to receive(:status).and_raise(Aws::EC2::Errors::InvalidVolumeNotFound)
 
           described_class.for_volume(volume: volume, state: :deleted)
         end

@@ -14,11 +14,14 @@ module Bosh::AwsCloud
     end
 
     def elastic_ip
-      @aws_instance.public_ip_address
+      if @aws_instance.classic_address
+        @aws_instance.classic_address.public_ip
+      else
+        nil
+      end
     end
 
     def associate_elastic_ip(elastic_ip)
-      # @aws_instance.associate_elastic_ip(elastic_ip)
       classic_address = Aws::EC2::ClassicAddress.new(elastic_ip)
       classic_address.associate({
         instance_id: @aws_instance.id,
@@ -26,7 +29,11 @@ module Bosh::AwsCloud
     end
 
     def disassociate_elastic_ip
-      @aws_instance.classic_address.disassociate
+      if @aws_instance.classic_address
+        @aws_instance.classic_address.disassociate
+      else
+        raise Bosh::Clouds::CloudError, 'Cannot call `disassociate_elastic_ip` on an Instance without an attached Elastic IP'
+      end
     end
 
     def source_dest_check=(state)
@@ -39,6 +46,7 @@ module Bosh::AwsCloud
       # forever (until the operation is cancelled by the user).
       begin
         @logger.info("Waiting for instance to be ready...")
+        # TODO: are states symbols or strings
         ResourceWait.for_instance(instance: @aws_instance, state: :running)
       rescue Bosh::Common::RetryCountExceeded
         message = "Timed out waiting for instance '#{@aws_instance.id}' to be running"
@@ -63,7 +71,7 @@ module Bosh::AwsCloud
     def terminate(fast=false)
       begin
         @aws_instance.terminate
-      rescue Aws::EC2::Errors::InvalidInstanceID::NotFound => e
+      rescue Aws::EC2::Errors::InvalidInstanceIDNotFound => e
         @logger.warn("Failed to terminate instance '#{@aws_instance.id}' because it was not found: #{e.inspect}")
         raise Bosh::Clouds::VMNotFound, "VM `#{@aws_instance.id}' not found"
       ensure
@@ -80,7 +88,7 @@ module Bosh::AwsCloud
       begin
         @logger.info("Deleting instance '#{@aws_instance.id}'")
         ResourceWait.for_instance(instance: @aws_instance, state: :terminated)
-      rescue Aws::EC2::Errors::InvalidInstanceID::NotFound => e
+      rescue Aws::EC2::Errors::InvalidInstanceIDNotFound => e
         @logger.debug("Failed to find terminated instance '#{@aws_instance.id}' after deletion: #{e.inspect}")
         # It's OK, just means that instance has already been deleted
       end

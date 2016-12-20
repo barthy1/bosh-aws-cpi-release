@@ -19,7 +19,7 @@ module Bosh::AwsCloud
       @block_device_manager.vm_type = vm_type
       @block_device_manager.virtualization_type = ami.virtualization_type
       @block_device_manager.root_device_name = ami.root_device_name
-      @block_device_manager.ami_block_device_names = ami.block_device_mappings.map { |blk| blk['device_name'] }
+      @block_device_manager.ami_block_device_names = ami.block_device_mappings.map { |blk| blk.device_name }
       block_device_info = @block_device_manager.mappings
       block_device_agent_info = @block_device_manager.agent_info
 
@@ -61,7 +61,7 @@ module Bosh::AwsCloud
     private
 
     def build_instance_params(stemcell_id, vm_type, networks_spec, block_device_mappings, disk_locality = [], options = {})
-      volume_zones = (disk_locality || []).map { |volume_id| @ec2.volumes[volume_id].availability_zone.to_s }
+      volume_zones = (disk_locality || []).map { |volume_id| @ec2.volume(volume_id).availability_zone }
 
       @param_mapper.manifest_params = {
         stemcell_id: stemcell_id,

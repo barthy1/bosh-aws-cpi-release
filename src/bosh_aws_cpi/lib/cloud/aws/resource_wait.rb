@@ -64,7 +64,8 @@ module Bosh::AwsCloud
       ) do |attachments|
         my_attachment = attachments.select { |a| a.device == device}.first
         if my_attachment.nil?
-          false
+          # my_attachment is nil on detach success since is not part of the volume attachments anymore
+          volume.state == 'available'
         else
           my_attachment.state == target_state.to_s
         end
@@ -107,6 +108,7 @@ module Bosh::AwsCloud
     rescue Aws::EC2::Errors::InvalidVolumeNotFound
       # if an volume is deleted, AWS can reap the object and the reference is no longer found,
       # so consider this exception a success condition if we are deleting
+      binding.pry
       raise unless target_state == :deleted
     end
 

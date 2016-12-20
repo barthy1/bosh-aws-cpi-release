@@ -7,7 +7,9 @@ module Bosh::AwsCloud
     METADATA_TIMEOUT = 5 # in seconds
     DEVICE_POLL_TIMEOUT = 60 # in seconds
 
+    # TODO: should we remove ec2_client reader to encourage use of Resources only? (ec2_resource.client)
     attr_reader :ec2_client
+    attr_reader :ec2_resource
     attr_reader :registry
     attr_reader :options
     attr_accessor :logger
@@ -35,7 +37,8 @@ module Bosh::AwsCloud
         @aws_params[:region] = aws_properties['region']
       end
       if aws_properties['ec2_endpoint']
-        @aws_params[:endpoint] = aws_properties['ec2_endpoint'] # TODO: why strip protocol for v1 SDK?
+        # TODO: make sure protocol is not required, if it is auto-add https://
+        @aws_params[:endpoint] = aws_properties['ec2_endpoint']
       end
 
       # TODO: we need to address this for SDK v2; it appears we need a different object
@@ -52,7 +55,8 @@ module Bosh::AwsCloud
       # - if "env_or_profile", credentials are read from instance metadata
       credentials_source = aws_properties['credentials_source'] || 'static'
 
-      # TODO: should we use Bosh::AwsCloud::CredentialsProvider class?
+      # TODO: remove Bosh::AwsCloud::CredentialsProvider class
+      # TODO: test env_or_profile path
       if credentials_source == 'static'
         @aws_params[:credentials] = Aws::Credentials.new(aws_properties['access_key_id'], aws_properties['secret_access_key'])
       else
@@ -274,7 +278,7 @@ module Bosh::AwsCloud
         Bosh::Common.retryable(tries: tries, sleep: sleep_cb, on: error, ensure: ensure_cb) do
           begin
             volume.delete
-          rescue Aws::EC2::Errors::InvalidVolume::NotFound => e
+          rescue Aws::EC2::Errors::InvalidVolumeNotFound => e
             logger.warn("Failed to delete disk '#{disk_id}' because it was not found: #{e.inspect}")
             raise Bosh::Clouds::DiskNotFound.new(false), "Disk '#{disk_id}' not found"
           end
@@ -285,7 +289,7 @@ module Bosh::AwsCloud
           begin
             TagManager.tag(volume, "Name", "to be deleted")
             logger.info("Volume `#{disk_id}' has been marked for deletion")
-          rescue Aws::EC2::Errors::InvalidVolume::NotFound
+          rescue Aws::EC2::Errors::InvalidVolumeNotFound
             # Once in a blue moon AWS if actually fast enough that the volume is already gone
             # when we get here, and if it is, our work here is done!
           end
@@ -346,9 +350,9 @@ module Bosh::AwsCloud
 
     def get_disks(vm_id)
       disks = []
-      @ec2_resource.instance(vm_id).block_devices.each do |block_device|
-        if block_device[:ebs]
-          disks << block_device[:ebs][:volume_id]
+      @ec2_resource.instance(vm_id).block_device_mappings.each do |block_device|
+        if block_device.ebs
+          disks << block_device.ebs.volume_id
         end
       end
       disks
@@ -450,7 +454,7 @@ module Bosh::AwsCloud
       end
     end
 
-    # Add tags to an instance. In addition to the suplied tags,
+    # Add tags to an instance. In addition to the supplied tags,
     # it adds a 'Name' tag as it is shown in the AWS console.
     # @param [String] vm vm id that was once returned by {#create_vm}
     # @param [Hash] metadata metadata key/value pairs
@@ -460,6 +464,7 @@ module Bosh::AwsCloud
 
       instance = @ec2_resource.instance(vm)
 
+      # TODO: bulk update, single HTTP call
       metadata.each_pair do |key, value|
         TagManager.tag(instance, key, value) unless key == 'name'
       end
@@ -656,21 +661,20 @@ module Bosh::AwsCloud
     end
 
     def detach_ebs_volume(instance, volume, force=false)
-      mappings = instance.block_device_mappings.to_hash
-
-      device_map = mappings.inject({}) do |hash, (device_name, attachment)|
-        hash[attachment.volume.id] = device_name
-        hash
-      end
-      if device_map[volume.id].nil?
+      device_mapping = instance.block_device_mappings.select { |dm| dm.ebs.volume_id == volume.id }.first
+      if device_mapping.nil?
         raise Bosh::Clouds::DiskNotAttached.new(true),
           "Disk `#{volume.id}' is not attached to instance `#{instance.id}'"
       end
 
-      attachment = volume.detach_from(instance, device_map[volume.id], force: force)
+      attachment = volume.detach_from_instance({
+        instance_id: instance.id,
+        device: device_mapping.device_name,
+        force: force,
+      })
       logger.info("Detaching `#{volume.id}' from `#{instance.id}'")
 
-      ResourceWait.for_attachment(attachment: attachment, state: :detached)
+      ResourceWait.for_attachment(volume: volume, device: attachment.device, state: :detached, instance_id: attachment.instance_id)
     end
 
     ##
@@ -777,9 +781,6 @@ module Bosh::AwsCloud
       # make an arbitrary HTTP request to ensure we can connect and creds are valid
       @ec2_resource.subnets.first
       true
-    rescue SocketError => socket_error
-      logger.error("Failed to connect to AWS: #{socket_error.inspect}\n#{socket_error.backtrace.join("\n")}")
-      cloud_error("Unable to create a connection to AWS; please check your region or EC2 endpoint.\nIaaS Error: #{socket_error.inspect}")
     rescue Net::OpenTimeout => e
       false
     end
