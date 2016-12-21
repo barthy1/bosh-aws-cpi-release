@@ -101,17 +101,23 @@ module Bosh::AwsCloud
 
     def update_routing_tables(route_definitions)
       if route_definitions.length > 0
-        @logger.debug("Associating instance with destinations in the routing tables")
+        @logger.debug('Associating instance with destinations in the routing tables')
         tables = @aws_instance.vpc.route_tables
         route_definitions.each do |definition|
-          @logger.debug("Finding routing table '#{definition["table_id"]}'")
-          table = tables[definition["table_id"]]
-          @logger.debug("Sending traffic for '#{definition["destination"]}' to '#{@aws_instance.id}' in '#{definition["table_id"]}'")
+          @logger.debug("Finding routing table '#{definition['table_id']}'")
+          table = tables.find { |t| t.id == definition['table_id'] }
+          @logger.debug("Sending traffic for '#{definition['destination']}' to '#{@aws_instance.id}' in '#{definition['table_id']}'")
 
-          if table.routes.any? {|route| route.destination_cidr_block == definition["destination"] }
-            table.replace_route(definition["destination"], { :instance => @aws_instance })
+          if table.routes.any? {|route| route.destination_cidr_block == definition['destination'] }
+            table.replace_route({
+              destination_cidr_block: definition['destination'],
+              instance_id: @aws_instance.id,
+            })
           else
-            table.create_route(definition["destination"], { :instance => @aws_instance })
+            table.create_route({
+              destination_cidr_block: definition['destination'],
+              instance_id: @aws_instance.id,
+            })
           end
         end
       end

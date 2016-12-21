@@ -707,7 +707,8 @@ describe Bosh::AwsCloud::Cloud do
       # Detaching a non-existing disk from vm should NOT raise error
       vm_lifecycle do |instance_id|
         expect {
-          cpi.detach_disk(instance_id, 'non-existing-volume-uuid')
+          # long-gone volume id used, avoids `Aws::EC2::Errors::InvalidParameterValue`
+          cpi.detach_disk(instance_id, 'vol-092cfeeb61c2cf243')
         }.to_not raise_error
       end
     end
@@ -715,7 +716,8 @@ describe Bosh::AwsCloud::Cloud do
     context '#set_vm_metadata' do
       it 'correctly sets the tags set by #set_vm_metadata' do
         vm_lifecycle do |instance_id|
-          tags = cpi.ec2_resource.instance(instance_id).tags
+          instance = cpi.ec2_resource.instance(instance_id)
+          tags = array_key_value_to_hash(instance.tags)
           expect(tags['deployment']).to eq('deployment')
           expect(tags['job']).to eq('cpi_spec')
           expect(tags['index']).to eq('0')
@@ -742,9 +744,12 @@ describe Bosh::AwsCloud::Cloud do
     context 'with advertised_routes' do
       let(:route_destination) { '9.9.9.9/32' }
       let(:route_table_id) do
-        rt = cpi.ec2_resource.subnet(@subnet_id).route_table
-        expect(rt).to_not be_nil, "Subnet '#{@subnet_id}' must have an associated route table"
-        rt.id
+        vpc_id = cpi.ec2_resource.subnet(@subnet_id).vpc_id
+        rt = cpi.ec2_resource.client.create_route_table({
+          vpc_id: vpc_id,
+        }).route_table
+        expect(rt).to_not be_nil
+        rt.route_table_id
       end
       let(:vm_type) do
         {
@@ -759,27 +764,31 @@ describe Bosh::AwsCloud::Cloud do
         }
       end
 
+      after(:each) do
+        cpi.ec2_resource.client.delete_route_table({ route_table_id: route_table_id })
+      end
+
       it 'associates the route to the created instance' do
-        route_table = cpi.ec2_client.route_tables[route_table_id]
+        route_table = cpi.ec2_resource.route_table(route_table_id)
         expect(route_table).to_not be_nil, "Could not found route table with id '#{route_table_id}'"
 
         vm_lifecycle do |instance_id|
-          found_route = route_table.routes.any? { |r| r.destination_cidr_block == route_destination && r.instance.id == instance_id }
+          found_route = route_table.routes.any? { |r| r.destination_cidr_block == route_destination && r.instance_id == instance_id }
           expect(found_route).to be(true), "Expected to find route with destination '#{route_destination}', but did not"
         end
       end
 
       it 'updates the route if the route already exists' do
-        route_table = cpi.ec2_client.route_tables[route_table_id]
+        route_table = cpi.ec2_resource.route_table(route_table_id)
         expect(route_table).to_not be_nil, "Could not found route table with id '#{route_table_id}'"
 
         vm_lifecycle do |original_instance_id|
-          found_route = route_table.routes.any? { |r| r.destination_cidr_block == route_destination && r.instance.id == original_instance_id }
+          found_route = route_table.routes.any? { |r| r.destination_cidr_block == route_destination && r.instance_id == original_instance_id }
           expect(found_route).to be(true), "Expected to find route with destination '#{route_destination}', but did not"
 
           vm_type['advertised_routes'].first['destination'] = '7.7.7.7/32'
           vm_lifecycle do |instance_id|
-            found_route = route_table.routes.any? { |r| r.destination_cidr_block == '7.7.7.7/32' && r.instance.id == instance_id }
+            found_route = route_table.routes.any? { |r| r.destination_cidr_block == '7.7.7.7/32' && r.instance_id == instance_id }
             expect(found_route).to be(true), "Expected to find route with destination '#{route_destination}', but did not"
           end
         end

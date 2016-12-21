@@ -64,6 +64,7 @@ module Bosh::AwsCloud
       ) do |attachments|
         my_attachment = attachments.select { |a| a.device == device}.first
         if my_attachment.nil?
+          # TODO: sanity check this
           # my_attachment is nil on detach success since is not part of the volume attachments anymore
           volume.state == 'available'
         else

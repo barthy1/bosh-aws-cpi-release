@@ -30,7 +30,8 @@ module Bosh::AwsCloud
 
       @aws_params = {
         retry_limit: aws_properties['max_retries'],
-        logger: aws_logger
+        logger: aws_logger,
+        log_level: :debug,
       }
 
       if aws_properties['region']
@@ -81,7 +82,8 @@ module Bosh::AwsCloud
       elb = Aws::ElasticLoadBalancing::Client.new(
         {
           region: @aws_params[:region],
-          credentials: @aws_params[:credentials]
+          credentials: @aws_params[:credentials],
+          logger: @logger,
         }
       )
 
