@@ -229,8 +229,11 @@ module Bosh::AwsCloud
           kms_key_arn: cloud_properties['kms_key_arn']
         )
 
-        volume_type = @ec2_client.create_volume(volume_properties.persistent_disk_config)
-        volume = Aws::EC2::Volume.new(volume_type.volume_id, @ec2_client)
+        volume_resp = @ec2_client.create_volume(volume_properties.persistent_disk_config)
+        volume = Aws::EC2::Volume.new(
+          id: volume_resp.volume_id,
+          client: @ec2_client,
+        )
 
         logger.info("Creating volume '#{volume.id}'")
         ResourceWait.for_volume(volume: volume, state: 'available')
